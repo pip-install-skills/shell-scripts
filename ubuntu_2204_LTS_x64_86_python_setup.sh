@@ -24,6 +24,10 @@ echo "Verifying Python installations..."
 python3.11 --version
 python3.12 --version
 
+echo "Configuring UV Package Manager"
+sudo snap install astral-uv --classic
+uv python pin --global 3.12
+
 echo "Python setup complete!"
 
 # Install git
