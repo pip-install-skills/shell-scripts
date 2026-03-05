@@ -19,3 +19,5 @@ sudo apt-get update
 sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
 
 sudo docker run hello-world
+
+# curl -s https://raw.githubusercontent.com/pip-install-skills/shell-scripts/refs/heads/main/ubuntu_docker_setup.sh | bash
