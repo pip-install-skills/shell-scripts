@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 
-# Exit immediately if a command exits with a non-zero status
+# Configure a repository-specific GitHub deploy key.
+#
+# Usage:
+#   ./setup-github-deploy-key.sh https://github.com/username/repository.git
+#   ./setup-github-deploy-key.sh git@github.com:username/repository.git
+#
+# Behavior:
+#   - If run inside an existing Git repository, configure/update its origin.
+#   - Otherwise, clone the GitHub repository into ./<repository>.
+#   - Never overwrites an existing origin without asking.
+#   - Never pushes automatically.
+
 set -e
 
 # --- 1. Validation & Parsing ---
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
     echo "Usage: $0 <github-repo-url>"
     echo "Example: $0 https://github.com/username/repository.git"
     exit 1
 fi
 
-REPO_URL=$1
+REPO_URL="$1"
 
 # Ensure git is installed
 if ! command -v git &> /dev/null; then
@@ -18,8 +29,7 @@ if ! command -v git &> /dev/null; then
     exit 1
 fi
 
-# Extract the username and repository name using basic string manipulation
-# Removes trailing .git if present
+# Remove a trailing .git if present.
 CLEAN_URL=$(echo "$REPO_URL" | sed 's/\.git$//')
 
 if [[ "$CLEAN_URL" == https://github.com/* ]]; then
@@ -34,17 +44,36 @@ fi
 GITHUB_USER=$(echo "$USER_REPO" | cut -d'/' -f1)
 GITHUB_REPO=$(echo "$USER_REPO" | cut -d'/' -f2)
 
-# Define unique key names based on the repo to prevent overwriting existing keys
+if [ -z "$GITHUB_USER" ] || [ -z "$GITHUB_REPO" ] || [ "$USER_REPO" = "$GITHUB_USER" ]; then
+    echo "Error: Could not parse GitHub owner/repository from '$REPO_URL'."
+    exit 1
+fi
+
+# Define unique key names based on the repo to prevent overwriting existing keys.
 KEY_NAME="deploy_key_${GITHUB_USER}_${GITHUB_REPO}"
 KEY_PATH="$HOME/.ssh/$KEY_NAME"
 SSH_ALIAS="github.com-${GITHUB_REPO}"
+REMOTE_URL="git@${SSH_ALIAS}:${GITHUB_USER}/${GITHUB_REPO}.git"
+
+# Determine whether we were launched from an existing Git worktree.
+IN_EXISTING_REPO=false
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    IN_EXISTING_REPO=true
+fi
 
 echo "================================================="
 echo " Configuring Deploy Key for: $GITHUB_USER/$GITHUB_REPO"
 echo "================================================="
 
+if [ "$IN_EXISTING_REPO" = true ]; then
+    echo "Detected an existing Git repository: $(git rev-parse --show-toplevel)"
+else
+    echo "No existing Git repository detected in the current directory."
+    echo "The repository will be cloned into: ./$GITHUB_REPO"
+fi
+
 # --- 2. VM Configuration: Generate SSH Key ---
-# Ensure .ssh directory exists with correct permissions
+# Ensure .ssh directory exists with correct permissions.
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 
@@ -61,53 +90,7 @@ SSH_CONFIG_PATH="$HOME/.ssh/config"
 touch "$SSH_CONFIG_PATH"
 chmod 600 "$SSH_CONFIG_PATH"
 
-# Check if the alias already exists to prevent duplicate entries
-if ! grep -q "Host $SSH_ALIAS" "$SSH_CONFIG_PATH"; then
-    echo -e "\nHost $SSH_ALIAS\n    HostName github.com\n    User git\n    IdentityFile $KEY_PATH\n    IdentitiesOnly yes\n" >> "$SSH_CONFIG_PATH"
-    echo "Added SSH alias configuration to $SSH_CONFIG_PATH"
-else
-    echo "SSH alias for $SSH_ALIAS already exists in config. Skipping."
-fi
-
-# --- 4. GitHub UI Instructions ---
-echo "================================================="
-echo " ACTION REQUIRED ON GITHUB"
-echo "================================================="
-echo "1. Go to: https://github.com/$GITHUB_USER/$GITHUB_REPO/settings/keys"
-echo "2. Click on 'Add deploy key'."
-echo "3. Give it a title (e.g., 'VM Deploy Key - $HOSTNAME')."
-echo "4. Copy and paste the following public key into the 'Key' field:"
-echo ""
-echo "-------------------------------------------------"
-cat "${KEY_PATH}.pub"
-echo "-------------------------------------------------"
-echo ""
-echo "5. (Optional) Check 'Allow write access' if your VM needs to push code."
-echo "6. Click 'Add key'."
-echo "================================================="
-
-# --- 5. Pause for User Action ---
-read -p "Press [Enter] ONLY AFTER you have added the key to GitHub..."
-
-# --- 6. VM Action: Clone the Repository ---
-echo "Testing connection and cloning repository..."
-
-# Use ssh-keyscan to add github.com to known_hosts to prevent the interactive prompt
-if ! grep -q "github.com" "$HOME/.ssh/known_hosts" 2>/dev/null; then
-    ssh-keyscan -t ed25519 github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
-fi
-
-# We use the custom alias defined in the SSH config to force git to use the specific deploy key
-CLONE_URL="git@${SSH_ALIAS}:${GITHUB_USER}/${GITHUB_REPO}.git"
-
-if [ -d "$GITHUB_REPO" ]; then
-    echo "Directory '$GITHUB_REPO' already exists. Skipping clone."
-else
-    git clone "$CLONE_URL"
-    echo "Repository cloned successfully into ./$GITHUB_REPO"
-fi
-
-echo "================================================="
-echo " Setup Complete! "
-echo " You can now pull/fetch inside the $GITHUB_REPO directory."
-echo "================================================="
+# Check if the alias already exists to prevent duplicate entries.
+if ! grep -qE "^[[:space:]]*Host[[:space:]]+$SSH_ALIAS([[:space:]]|$)" "$SSH_CONFIG_PATH"; then
+    {
+        echo ""
